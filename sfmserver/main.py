@@ -10,7 +10,6 @@ import sys
 import logging
 import json
 
-
 from Packet import Packet, PacketClient, PacketAdmin, PacketQueue
 
 cThreads = None
@@ -27,6 +26,10 @@ def parseRetCode(code):
         pass
     else :
         return "Error occured"
+class ConnectionState():
+    CONNECTED = "Connected"
+    DISCONNECTED = "Disconnected"
+    CHECKING = "Checking"
 
 class Client(threading.Thread):
     Status = "status"
@@ -40,6 +43,9 @@ class Client(threading.Thread):
         self.ip = ip
         self.port = port
         self.cs = cs
+        self.state = ""
+        self.init = False
+
         print("[+] Nouveau thread pour %s %s" % (self.ip, self.port, ))
     
     def run(self): 
@@ -47,21 +53,36 @@ class Client(threading.Thread):
         print("Connection de %s %s" % (self.ip, self.port, ))
         #get informations about client
         try :
+            self.cs.settimeout(10)
             info = self.cs.recv(2048)
+
             self.name = Packet.parse(info)["name"]
             #define port
             lport = base_port + len(cThreads) 
             self.cs.send(self.buildReq(lport))
             pAck = self.cs.recv(2048)
             pAck = Packet.parse(pAck)
-            print pAck
             if pAck['code'] != 0 :
                 raise Exception('Error on port attribution')
             self.lport = lport
-
+            self.init = True
             while True :
                     logging.debug("Client %s:%s wait for message" % (self.ip, self.port))
-                    data = self.cQueue.get(block=True, timeout=None)
+                    data = None
+                    while 1 :
+                        try : 
+                            data = self.cQueue.get(block=True, timeout=10)
+                            break
+                        except Exception :
+                            logging.debug("Send ping to " + self.name)
+                            self.cs.send("ping")
+                            pong = self.cs.recv(2048)
+                            logging.debug(pong)
+                            if "pong" in pong:
+                                continue
+                            else :
+                                raise Exception("Connection error for client " + self.name)
+
                     logging.debug("Client %s:%s received message" % (self.ip, self.port))
                     data = Packet.parse(data)
                     logging.debug("Client %s:%s build & send message to client" % (self.ip, self.port))
@@ -76,6 +97,7 @@ class Client(threading.Thread):
             logging.error(e)
             self.cs.close()
         logging.info('Client %s disconnect' % (str(self.ip)))
+        cThreads.remove(self)
         del self
 
     @staticmethod 
@@ -112,6 +134,7 @@ class Admin(threading.Thread):
         while 1:
             try :
                 self.adminCSocket, self.cAddr = self.s.accept()
+                self.adminCSocket.settimeout(10)
                 data = self.adminCSocket.recv(1024)
                 logging.debug("Data received : " + data)
                 command = Packet.parse(data)['command']
@@ -125,6 +148,7 @@ class Admin(threading.Thread):
                 self.adminCSocket.close()
 
     def parseCommand(self, data):
+        global cThreads
         try :
             logging.debug('Entering the parseCommand function')
             response = None
@@ -133,7 +157,8 @@ class Admin(threading.Thread):
             if data == "list":
                 dataArray = []
                 for item in cThreads :
-                    dataArray.append("%d-%s-%d" % (cThreads.index(item), item.name, item.lport))
+                    if item.init :
+                        dataArray.append("%d-%s-%d" % (cThreads.index(item), item.name, item.lport))
                 response = '\n'.join(dataArray)+'\n'
             else :
                 cmd = data.split('_')
@@ -148,20 +173,26 @@ class Admin(threading.Thread):
 
                 tid = int(cmd[1])
                 logging.debug("Send command to Client Controller through Queue")
-                cThreads[tid].cQueue.put(self.buildReq(command))
-                r = self.Queue.get(block=True, timeout=None)
-                logging.debug("Response received from Client Controller")
-                r = Packet.parse(r)
-                logging.debug(r)
-                response = str(r['code'])+'\n'
-                name = cThreads[tid].name
-                port = cThreads[tid].lport
+                if cThreads[tid].init : 
+                    cThreads[tid].cQueue.put(self.buildReq(command))
+                    r = self.Queue.get(block=True, timeout=10)
+                    logging.debug("Response received from Client Controller")
+                    r = Packet.parse(r)
+                    logging.debug(r)
+                    response = str(r['code'])+'\n'
+                    name = cThreads[tid].name
+                    port = cThreads[tid].lport
+                else :
+                   name = "error"
+                   port = 0
+                   response = 0
             pResponse = self.buildResp(name, port, response)
             logging.debug('Send To Admin Controller')
             print(port)
             self.adminCSocket.send(pResponse)
         except Exception, e :
             logging.error(e)
+            
             #build error Packet
 
     @staticmethod
