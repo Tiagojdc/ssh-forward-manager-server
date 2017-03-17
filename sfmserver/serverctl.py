@@ -25,6 +25,20 @@ class CommandRunner():
         p.command = command
         p.build()
         return p.get()
+def parseRet(command, code):
+    if code == 3 :
+        return 'Error on server'
+    else :
+        if command == 'stop' or command == 'start':
+            if code == 0 :
+                return "Ok"
+            elif code == 2 :
+                return "Error"
+        elif command == 'get' :
+            if code == 0 :
+                return 'Started'
+            elif code == 1 :
+                return 'Stopped'
 
 def main ():
     parser = argparse.ArgumentParser(description='Manage ssh manager')
@@ -47,7 +61,8 @@ def main ():
             hid = args.id
             if command != 'connect' :
                 data = CommandRunner.run(command+'_'+str(hid))
-                print '%s-%s-%s' % (data['name'], data['port'], data['data'])
+                ret = parseRet(command, int(data['data']))
+                print 'ID : %d\n\t- Name : %s\n\t- Port : %d\n\t- Return : %s' % (hid, data['name'], data['port'], ret)
 
             else :
                 #get the port
